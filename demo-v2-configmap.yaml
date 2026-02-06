@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: demo-v2-config
+  namespace: demo
+data:
+  default.conf: |
+    server {
+      listen 8080;
+      location /api/info {
+        default_type application/json;
+        return 200 '{"version":"v2","color":"green","timestamp":"$time_iso8601","features":["new-feature-a"]}';
+      }
+      location /api/health {
+        default_type application/json;
+        return 200 '{"status":"UP"}';
+      }
+      location /api/orders {
+        default_type application/json;
+        return 200 '{"orders":[{"id":1,"item":"Widget","version":"v2"},{"id":2,"item":"Gadget","version":"v2"}]}';
+      }
+      location /api/slow {
+        default_type application/json;
+        return 200 '{"message":"fast response from v2"}';
+      }
+    }

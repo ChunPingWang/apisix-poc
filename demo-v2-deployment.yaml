@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-v2
+  namespace: demo
+  labels:
+    app: demo
+    version: v2
+    color: green
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: demo
+      version: v2
+  template:
+    metadata:
+      labels:
+        app: demo
+        version: v2
+        color: green
+    spec:
+      containers:
+        - name: demo
+          image: nginx:1.25-alpine
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nginx/conf.d
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+      volumes:
+        - name: config
+          configMap:
+            name: demo-v2-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-v2
+  namespace: demo
+  labels:
+    app: demo
+    version: v2
+spec:
+  selector:
+    app: demo
+    version: v2
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP

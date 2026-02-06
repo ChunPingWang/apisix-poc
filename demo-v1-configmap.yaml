@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: demo-v1-config
+  namespace: demo
+data:
+  default.conf: |
+    server {
+      listen 8080;
+      location /api/info {
+        default_type application/json;
+        return 200 '{"version":"v1","color":"blue","timestamp":"$time_iso8601"}';
+      }
+      location /api/health {
+        default_type application/json;
+        return 200 '{"status":"UP"}';
+      }
+      location /api/orders {
+        default_type application/json;
+        return 200 '{"orders":[{"id":1,"item":"Widget","version":"v1"}]}';
+      }
+      location /api/slow {
+        default_type application/json;
+        return 200 '{"message":"slow response from v1"}';
+      }
+    }
