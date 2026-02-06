@@ -19,57 +19,164 @@ Apache APISIX 是一個動態、即時、高效能的 API Gateway，由 Apache �
 
 ### 架構組件
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Apache APISIX                             │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  │
-│  │   Data Plane    │  │  Control Plane  │  │     etcd        │  │
-│  │   (Gateway)     │◄─┤   (Admin API)   │──┤  (Config Store) │  │
-│  │   :9080/:9443   │  │     :9180       │  │    :2379        │  │
-│  └─────────────────┘  └─────────────────┘  └─────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph APISIX["Apache APISIX"]
+        direction LR
+        DP["🚀 Data Plane<br/>(Gateway)<br/>:9080 / :9443"]
+        CP["⚙️ Control Plane<br/>(Admin API)<br/>:9180"]
+        ETCD["💾 etcd<br/>(Config Store)<br/>:2379"]
+
+        CP --> ETCD
+        ETCD --> DP
+    end
+
+    Client["👤 Client"] --> DP
+    Admin["👨‍💻 Admin"] --> CP
 ```
 
 ---
 
 ## 2. PoC 架構圖
 
+```mermaid
+flowchart TB
+    subgraph Client["🌐 外部存取"]
+        Browser["👤 Client / Browser"]
+        PF["🔌 Port Forward<br/>localhost:9080"]
+    end
+
+    Browser --> PF
+
+    subgraph Kind["☸️ Kind Cluster (apisix-poc)"]
+        subgraph NS_APISIX["📦 Namespace: apisix"]
+            ETCD["💾 etcd<br/>Config Store"]
+            GW["🚀 APISIX Gateway<br/>:9080 HTTP<br/>:9180 Admin<br/>:9091 Metrics"]
+            ETCD <--> GW
+        end
+
+        subgraph NS_DEMO["📦 Namespace: demo"]
+            subgraph Blue["🔵 Blue (v1)"]
+                V1_1["demo-v1<br/>Pod 1"]
+                V1_2["demo-v1<br/>Pod 2"]
+            end
+            subgraph Green["🟢 Green (v2)"]
+                V2_1["demo-v2<br/>Pod 1"]
+                V2_2["demo-v2<br/>Pod 2"]
+            end
+        end
+
+        subgraph NS_MON["📦 Namespace: monitoring"]
+            MON["📊 Prometheus<br/>📈 Grafana<br/>🔍 Jaeger<br/>(可選)"]
+        end
+
+        PF --> GW
+        GW -->|"traffic-split<br/>90%"| Blue
+        GW -->|"traffic-split<br/>10%"| Green
+        GW -.-> MON
+    end
 ```
-                    ┌─────────────────────────────────────────────────┐
-                    │              Kind Cluster (apisix-poc)          │
-                    │                                                  │
-  Client/Browser    │  ┌──────────────────────────────────────────┐   │
-        │           │  │          Namespace: apisix                │   │
-        │           │  │                                           │   │
-        ▼           │  │   ┌─────────┐    ┌──────────────────┐    │   │
-   ┌─────────┐      │  │   │  etcd   │◄───│  APISIX Gateway  │    │   │
-   │  Port   │──────┼──┼──►│ (config │    │  (Data Plane)    │    │   │
-   │ Forward │      │  │   │  store) │    │  :9080 HTTP      │    │   │
-   │ 9080    │      │  │   └─────────┘    │  :9180 Admin     │    │   │
-   └─────────┘      │  │                  │  :9091 Metrics   │    │   │
-                    │  │                  └──────┬───────────┘    │   │
-                    │  └─────────────────────────┼────────────────┘   │
-                    │                            │                    │
-                    │         traffic-split       │                    │
-                    │        ┌────────────────────┤                    │
-                    │        │                    │                    │
-                    │        ▼                    ▼                    │
-                    │  ┌───────────────┐    ┌───────────────┐          │
-                    │  │  Namespace:   │    │  Namespace:   │          │
-                    │  │  demo         │    │  demo         │          │
-                    │  │               │    │               │          │
-                    │  │  ┌─────────┐  │    │  ┌─────────┐  │          │
-                    │  │  │ demo-v1 │  │    │  │ demo-v2 │  │          │
-                    │  │  │ (Blue)  │  │    │  │ (Green) │  │          │
-                    │  │  │ x2 pods │  │    │  │ x2 pods │  │          │
-                    │  │  └─────────┘  │    │  └─────────┘  │          │
-                    │  └───────────────┘    └───────────────┘          │
-                    │                                                  │
-                    │  ┌──────────────────────────────────────────┐   │
-                    │  │          Namespace: monitoring            │   │
-                    │  │  (可選：Prometheus / Grafana / Jaeger)    │   │
-                    │  └──────────────────────────────────────────┘   │
-                    └─────────────────────────────────────────────────┘
+
+### 藍綠部署流量切換示意
+
+```mermaid
+flowchart LR
+    subgraph Scenarios["🔄 流量切換場景"]
+        direction TB
+        S1["場景 A: 金絲雀<br/>90% Blue / 10% Green"]
+        S2["場景 B: 50/50<br/>50% Blue / 50% Green"]
+        S3["場景 C: 全量切換<br/>0% Blue / 100% Green"]
+        S4["場景 D: 回滾<br/>100% Blue / 0% Green"]
+    end
+
+    Client["👤 Request"] --> GW["🚀 APISIX<br/>Gateway"]
+
+    GW --> |"weight: 90"| Blue["🔵 Blue v1"]
+    GW --> |"weight: 10"| Green["🟢 Green v2"]
+
+    subgraph Header["📋 Header-Based 路由"]
+        H1["X-Canary: true → Green"]
+        H2["無 Header → Blue"]
+    end
+```
+
+### 請求處理流程
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as 👤 Client
+    participant G as 🚀 APISIX Gateway
+    participant P as 🔌 Plugins
+    participant U as 🎯 Upstream
+    participant B as 📦 Backend
+
+    C->>G: HTTP Request
+    G->>P: 執行 Plugins
+
+    Note over P: 🔐 key-auth / jwt-auth
+    Note over P: 🚦 limit-count / limit-req
+    Note over P: 🔀 traffic-split
+    Note over P: ✏️ proxy-rewrite
+
+    P->>G: Plugin 處理完成
+    G->>U: 選擇 Upstream
+    U->>B: 轉發請求
+    B->>U: 回應
+    U->>G: 回應
+
+    G->>P: 執行回應 Plugins
+    Note over P: 📝 response-rewrite
+    Note over P: 🛡️ 安全標頭注入
+
+    P->>G: 處理完成
+    G->>C: HTTP Response
+```
+
+### 插件架構圖
+
+```mermaid
+flowchart TB
+    subgraph Plugins["🔌 APISIX 插件生態系"]
+        subgraph Auth["🔐 認證授權"]
+            KA["key-auth"]
+            JA["jwt-auth"]
+            BA["basic-auth"]
+        end
+
+        subgraph Traffic["🚦 流量控制"]
+            LC["limit-count"]
+            LR["limit-req"]
+            TS["traffic-split"]
+            AB["api-breaker"]
+        end
+
+        subgraph Security["🛡️ 安全防護"]
+            CORS["cors"]
+            IPR["ip-restriction"]
+            RV["request-validation"]
+        end
+
+        subgraph Transform["✏️ 請求/回應處理"]
+            PR["proxy-rewrite"]
+            RR["response-rewrite"]
+        end
+
+        subgraph Observe["📊 可觀測性"]
+            PROM["prometheus"]
+            LOG["http-logger"]
+            OT["opentelemetry"]
+        end
+    end
+
+    REQ["📥 Request"] --> Auth
+    Auth --> Traffic
+    Traffic --> Security
+    Security --> Transform
+    Transform --> BE["🎯 Backend"]
+    BE --> Transform
+    Transform --> Observe
+    Observe --> RES["📤 Response"]
 ```
 
 ---
