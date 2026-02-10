@@ -9,17 +9,19 @@
 ## 目錄
 
 1. [核心概念說明](#1-核心概念說明)
-2. [架構總覽](#2-架構總覽)
-3. [前置準備](#3-前置準備)
+   - [Service vs Ingress vs API Gateway 決策流程圖](#15-service-vs-ingress-vs-api-gateway--我該用哪個)
+   - [深入理解 etcd 的角色](#16-深入理解-etcd-在-apisix-中的角色)
+2. [架構總覽](#2-架構總覽)（含請求封包流向圖）
+3. [前置準備](#3-前置準備)（含資源消耗對照表）
 4. [快速開始](#4-快速開始)
 5. [Phase 1：建立 Kind 叢集與部署範例應用](#5-phase-1建立-kind-叢集與部署範例應用)
 6. [Phase 2：設定 NGINX Ingress Controller](#6-phase-2設定-nginx-ingress-controller)
-7. [Phase 3：設定 Apache APISIX](#7-phase-3設定-apache-apisix)
+7. [Phase 3：設定 Apache APISIX](#7-phase-3設定-apache-apisix)（含三種設定方式比較）
 8. [Phase 4：比較測試](#8-phase-4比較測試)
 9. [Phase 5：可觀測性（Observability）](#9-phase-5可觀測性observability)
 10. [功能比較表](#10-功能比較表)
-11. [結論與建議](#11-結論與建議)
-12. [疑難排解](#12-疑難排解)
+11. [結論與建議](#11-結論與建議)（含 Gateway API 未來趨勢）
+12. [疑難排解](#12-疑難排解)（錯誤導向除錯指南）
 13. [名詞解釋](#13-名詞解釋)
 
 ---
@@ -123,6 +125,89 @@ flowchart TB
 - 用完即棄 — 隨時刪除重建
 - 支援 Port Mapping，可以從 localhost 存取服務
 
+### 1.5 Service vs Ingress vs API Gateway — 我該用哪個？
+
+初學者最常見的困惑是：Kubernetes 有這麼多種方式把流量送進來，到底該選哪個？
+
+以下決策流程圖可以幫助你快速判斷：
+
+```mermaid
+flowchart TD
+    START["我需要讓外部存取我的服務"] --> Q1{"只需要叢集內部\n服務間通訊？"}
+    Q1 -->|是| A1["使用 Service\n（ClusterIP）"]
+    Q1 -->|否| Q2{"只需要對外暴露\n單一服務？"}
+    Q2 -->|是| A2["使用 Service\n（NodePort / LoadBalancer）"]
+    Q2 -->|否| Q3{"需要路由多個服務\n（依路徑/主機名稱）？"}
+    Q3 -->|是| Q4{"需要認證、限流\n可觀測性等進階功能？"}
+    Q3 -->|否| A2
+    Q4 -->|不需要| A3["使用 Ingress\n（NGINX Ingress Controller）"]
+    Q4 -->|需要| A4["使用 API Gateway\n（Apache APISIX）"]
+
+    style A1 fill:#e8f5e9
+    style A2 fill:#e3f2fd
+    style A3 fill:#fff3e0
+    style A4 fill:#fce4ec
+```
+
+**各方式的簡單比較：**
+
+| 方式 | 功能 | 適用場景 |
+|---|---|---|
+| **ClusterIP** | 叢集內部存取 | 微服務間互相呼叫 |
+| **NodePort** | 透過節點 IP + Port 存取 | 開發測試、簡單對外暴露 |
+| **LoadBalancer** | 雲端負載均衡器 | 生產環境單一服務對外 |
+| **Ingress** | L7 路由（路徑/主機） | 多個服務共用一個入口 |
+| **API Gateway** | 路由 + 認證 + 限流 + 監控 | 完整的 API 生命週期管理 |
+
+### 1.6 深入理解 etcd 在 APISIX 中的角色
+
+你可能會好奇：為什麼 APISIX 需要 etcd？NGINX Ingress 不需要額外的元件啊？
+
+**簡單類比：**
+
+- **NGINX Ingress** 像是用「紙本規則手冊」管理路由 — 改規則要重新印一本（reload config file）
+- **APISIX** 像是用「即時同步的雲端文件」管理路由 — 改了馬上所有人都看到（etcd watch）
+
+```mermaid
+flowchart LR
+    subgraph "NGINX Ingress 的設定方式"
+        YAML["YAML 設定檔"] -->|kubectl apply| API["K8s API Server"]
+        API -->|watch| CTRL["Ingress Controller"]
+        CTRL -->|reload| NG["NGINX Process"]
+    end
+```
+
+```mermaid
+flowchart LR
+    subgraph "APISIX 的設定方式"
+        ADMIN["Admin API / Dashboard"] -->|寫入| ETCD["etcd"]
+        ETCD -->|watch 即時推送| GW1["APISIX 節點 1"]
+        ETCD -->|watch 即時推送| GW2["APISIX 節點 2"]
+        ETCD -->|watch 即時推送| GW3["APISIX 節點 N..."]
+    end
+```
+
+**etcd 的關鍵優勢：**
+
+| 特性 | 說明 |
+|---|---|
+| **即時同步** | 設定變更在毫秒內推送到所有 APISIX 節點 |
+| **無需重啟** | 不像 NGINX 需要 reload，APISIX 完全熱更新 |
+| **多節點一致** | 多個 APISIX 實例自動保持設定一致 |
+| **持久化** | 設定不會因為 APISIX 重啟而遺失 |
+
+**在本 PoC 中如何查看 etcd 資料：**
+
+```bash
+# 進入 etcd Pod
+kubectl -n apisix exec -it $(kubectl -n apisix get pods -l app.kubernetes.io/name=etcd -o name) -- sh
+
+# 列出所有 APISIX 路由設定
+etcdctl get /apisix/routes --prefix --keys-only
+```
+
+> **生產環境注意：** etcd 在生產環境建議部署 3 個節點以確保高可用性。本 PoC 為簡化只用 1 個節點。
+
 ---
 
 ## 2. 架構總覽
@@ -147,6 +232,52 @@ flowchart LR
     APISIX --> V1
     APISIX --> V2
 ```
+
+### 請求封包流向
+
+了解一個 HTTP 請求如何從你的瀏覽器到達 Pod，是理解整個架構的關鍵。
+
+**透過 NGINX Ingress 的請求流向：**
+
+```mermaid
+sequenceDiagram
+    participant C as curl / 瀏覽器
+    participant D as Docker Port Mapping
+    participant N as NGINX Ingress Controller
+    participant S as K8s Service (kube-proxy)
+    participant P as Pod (app-v1)
+
+    C->>D: curl -H "Host: demo.local" localhost:80/v1
+    D->>N: 轉發到 container port 80
+    N->>N: 比對 Ingress 規則（Host + Path）
+    N->>S: 轉發到 app-v1-svc:80
+    S->>P: iptables/IPVS 負載均衡到 Pod
+    P-->>C: "Hello from App V1"
+```
+
+**透過 APISIX 的請求流向：**
+
+```mermaid
+sequenceDiagram
+    participant C as curl / 瀏覽器
+    participant D as Docker Port Mapping
+    participant A as Apache APISIX
+    participant E as etcd
+    participant S as K8s Service
+    participant P as Pod (app-v1)
+
+    A->>E: 啟動時載入路由設定
+    Note over A,E: 持續 watch 設定變更
+
+    C->>D: curl localhost:9080/v1/
+    D->>A: 轉發到 container port 9080
+    A->>A: 比對路由 + 執行插件鏈（限流/認證等）
+    A->>S: 轉發到 app-v1-svc:80
+    S->>P: 負載均衡到 Pod
+    P-->>C: "Hello from App V1"
+```
+
+> **關鍵差異：** APISIX 在轉發前會執行「插件鏈」（Plugin Chain），這就是它能提供認證、限流等功能的原因。NGINX Ingress 只做簡單的路由比對。
 
 **Port 對應表：**
 
@@ -182,6 +313,22 @@ flowchart LR
 - **CPU：** 4 核心以上
 - **記憶體：** 最少 8 GB（建議 16 GB）
 - **硬碟：** 20 GB 可用空間
+
+**各元件的預估資源消耗：**
+
+| 元件 | 記憶體 (RAM) | CPU | 說明 |
+|---|---|---|---|
+| Kind 叢集（3 節點） | ~1.5 GB | ~0.5 core | 基礎叢集開銷 |
+| 範例應用（4 pods） | ~128 MB | ~0.2 core | 非常輕量 |
+| + NGINX Ingress Controller | ~200 MB | ~0.2 core | 單一 Pod |
+| + APISIX + etcd | ~500 MB | ~0.5 core | APISIX + etcd 各一個 Pod |
+| + Prometheus + Grafana | ~800 MB | ~0.5 core | 選裝，佔用較多 |
+| **全部安裝合計** | **~3.1 GB** | **~1.9 core** | |
+
+> **低資源環境提示：** 如果你的記憶體只有 8 GB，可以：
+> 1. 在 `kind-cluster.yaml` 中移除 worker 節點（只保留 control-plane）
+> 2. 將範例應用的 `replicas` 從 2 改為 1
+> 3. 不安裝 Prometheus + Grafana（跳過 Phase 5）
 
 ### 3.3 驗證安裝
 
@@ -418,6 +565,56 @@ done | sort | uniq -c
 > | 生效時間 | 需要 reload | 即時生效（透過 etcd） |
 > | 彈性 | 受限於 Annotation | 80+ 插件自由組合 |
 
+### APISIX 的三種設定方式
+
+APISIX 提供三種設定方式，適合不同的使用場景：
+
+| 方式 | 適用場景 | 說明 |
+|---|---|---|
+| **Admin API** | 腳本化、自動化 | 透過 HTTP REST API 直接操作，本 PoC 主要使用此方式 |
+| **Dashboard** | 視覺化探索、初學者 | Web UI 介面，適合用滑鼠點選設定路由和插件 |
+| **APISIX Ingress Controller (CRD)** | GitOps、宣告式管理 | 用 Kubernetes YAML 定義路由，適合版本控制 |
+
+**同一條路由的三種寫法比較：**
+
+**方式 1 — Admin API（本 PoC 使用）：**
+
+```bash
+curl http://127.0.0.1:9180/apisix/admin/routes/1 \
+  -H "X-API-KEY: edd1c9f034335f136f87ad84b625c8f1" \
+  -X PUT -d '{
+    "uri": "/v1/*",
+    "upstream": {
+      "type": "roundrobin",
+      "nodes": { "app-v1-svc.default.svc.cluster.local:80": 1 }
+    }
+  }'
+```
+
+**方式 2 — Dashboard：**
+
+在 `http://localhost:9000` 的 Web UI 中，點選「Routes」→「Create」→ 填寫 URI 和 Upstream。
+
+**方式 3 — CRD（YAML 宣告式）：**
+
+```yaml
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: route-v1
+spec:
+  http:
+    - name: route-v1
+      match:
+        paths:
+          - /v1/*
+      backends:
+        - serviceName: app-v1-svc
+          servicePort: 80
+```
+
+> **建議：** 初學者先用 Admin API 理解概念，熟悉後轉向 CRD 方式以配合 GitOps 流程。
+
 ---
 
 ## 8. Phase 4：比較測試
@@ -539,65 +736,148 @@ flowchart TB
 - **APISIX** 負責對外的 API 管理（認證、限流、監控）
 - **NGINX Ingress** 負責叢集內部服務之間的簡單路由
 
+### 展望：Gateway API — 下一代標準
+
+> **注意：** 本節是補充知識，不影響 PoC 操作。
+
+Kubernetes 社群正在推動 **Gateway API** 作為 Ingress 的下一代替代方案。如果你打算長期投入 Kubernetes 網路領域，值得關注：
+
+```mermaid
+timeline
+    title Kubernetes 流量管理演進
+    Ingress API (2015~) : 簡單 L7 路由
+                        : Annotation 擴展
+                        : 各家實作不一致
+    Gateway API (2023~) : 標準化的進階路由
+                        : 角色分離（Infra / App）
+                        : 原生支援流量分配
+    未來 : Ingress API 逐步退場
+         : Gateway API 成為主流
+```
+
+| 比較 | Ingress API | Gateway API |
+|---|---|---|
+| **狀態** | 穩定但功能凍結 | 核心功能 GA，持續演進 |
+| **路由能力** | 僅 Host + Path | Host、Path、Header、Method、Query |
+| **流量分配** | 需要 Annotation | 原生 `backendRefs` 加權 |
+| **角色分離** | 無 | 基礎設施管理員 vs 應用開發者 |
+| **APISIX 支援** | ✅ | ✅ 透過 APISIX Ingress Controller |
+
+**對本 PoC 的影響：** 無。本 PoC 的核心比較（Ingress vs API Gateway）仍然有效。Gateway API 解決的是「標準化路由規格」的問題，而 APISIX 作為 API Gateway 提供的認證、限流、可觀測性等功能，是 Gateway API 不涵蓋的範疇。
+
 ---
 
 ## 12. 疑難排解
 
-### Kind 叢集建立失敗
+### 錯誤導向除錯指南
+
+遇到問題時，先確認你看到的是什麼錯誤，然後按照對應的排查流程處理：
+
+```mermaid
+flowchart TD
+    START["curl 回傳錯誤"] --> Q1{"錯誤類型？"}
+    Q1 -->|"Connection refused"| CR["Port Mapping 問題"]
+    Q1 -->|"404 Not Found"| NF["路由規則問題"]
+    Q1 -->|"503 Service Unavailable"| SU["後端服務問題"]
+    Q1 -->|"429 Too Many Requests"| TM["限流生效（正常）"]
+    Q1 -->|"401 Unauthorized"| UA["認證問題"]
+
+    CR --> CR1["1. docker port poc-ingress-gw-control-plane\n2. kubectl get svc -A\n3. 確認 Kind 叢集是否執行中"]
+    NF --> NF1["1. kubectl get ingress（NGINX）\n2. curl Admin API 查路由（APISIX）\n3. 確認 Host header 和 Path"]
+    SU --> SU1["1. kubectl get pods -l app=demo\n2. kubectl get endpoints\n3. 確認 Pod 是否 Running"]
+    UA --> UA1["1. 確認 apikey header 名稱和值\n2. 確認 Consumer 已建立"]
+```
+
+### Connection refused — 連線被拒絕
+
+**症狀：** `curl: (7) Failed to connect to localhost port 80: Connection refused`
+
+**排查步驟：**
 
 ```bash
-# 確認 Docker 正在執行
+# Step 1: 確認 Docker 正在執行
 docker ps
 
-# 刪除舊叢集後重建
+# Step 2: 確認 Kind 叢集存在
+kind get clusters
+
+# Step 3: 確認 Port Mapping
+docker port poc-ingress-gw-control-plane
+# 預期看到：80/tcp -> 0.0.0.0:80
+
+# Step 4: 確認 Ingress Controller Pod 正在執行
+kubectl -n ingress-nginx get pods
+# 如果 Pod 不是 Running，查看日誌：
+kubectl -n ingress-nginx logs -l app.kubernetes.io/component=controller
+
+# 解決方案：如果叢集不存在，重新建立
 kind delete cluster --name poc-ingress-gw
 ./scripts/01-create-cluster.sh
 ```
 
-### NGINX Ingress Controller 無法啟動
+### 404 Not Found — 找不到路由
+
+**症狀：** 收到 404 回應
+
+**排查步驟：**
 
 ```bash
-# 查看 Pod 狀態
-kubectl -n ingress-nginx get pods
+# NGINX Ingress 排查：
+# Step 1: 確認 Ingress 資源存在
+kubectl get ingress
 
-# 查看日誌
-kubectl -n ingress-nginx logs -l app.kubernetes.io/component=controller
+# Step 2: 確認 Host header 正確（常見錯誤！）
+# 錯誤示範 — 少了 Host header：
+curl http://localhost/v1
+# 正確示範：
+curl -H "Host: demo.local" http://localhost/v1
+
+# Step 3: 確認 Ingress 規則的 path 和 service 名稱
+kubectl describe ingress demo-ingress
+
+# APISIX 排查：
+# Step 1: 確認路由已建立
+kubectl -n apisix port-forward svc/apisix-admin 9180:9180 &
+curl http://127.0.0.1:9180/apisix/admin/routes \
+  -H "X-API-KEY: edd1c9f034335f136f87ad84b625c8f1"
+
+# Step 2: 注意 URI 結尾的斜線
+# APISIX 路由定義為 /v1/*，所以：
+curl http://localhost:9080/v1/    # 正確（有尾斜線）
+curl http://localhost:9080/v1     # 可能 404（沒有尾斜線）
 ```
 
-### APISIX 無法啟動
+### 503 Service Unavailable — 後端服務不可用
+
+**症狀：** 收到 503 回應
+
+**排查步驟：**
 
 ```bash
-# 查看 Pod 狀態
-kubectl -n apisix get pods
+# Step 1: 確認 Pod 正在執行
+kubectl get pods -l app=demo
+# 所有 Pod 應該是 Running 狀態
 
-# 查看 APISIX 日誌
-kubectl -n apisix logs -l app.kubernetes.io/name=apisix
+# Step 2: 確認 Service 有對應的 Endpoints
+kubectl get endpoints app-v1-svc app-v2-svc
+# 應該看到 IP 位址，不是 <none>
 
-# 查看 etcd 日誌
-kubectl -n apisix logs -l app.kubernetes.io/name=etcd
-```
-
-### curl 無法連線到服務
-
-```bash
-# 確認 Port Mapping
-docker port poc-ingress-gw-control-plane
-
-# 確認服務狀態
-kubectl get svc -A
-
-# 測試叢集內部連線
+# Step 3: 從叢集內部測試直連
 kubectl run tmp --image=curlimages/curl --restart=Never --rm -it -- \
   curl http://app-v1-svc.default.svc.cluster.local
+# 如果成功，問題在 Ingress/APISIX 設定；如果失敗，問題在 Service/Pod
 ```
 
-### APISIX Admin API 無法存取
+### APISIX 相關問題
 
 ```bash
-# 設定 port-forward
-kubectl -n apisix port-forward svc/apisix-admin 9180:9180
+# APISIX Pod 無法啟動
+kubectl -n apisix get pods
+kubectl -n apisix logs -l app.kubernetes.io/name=apisix
+kubectl -n apisix logs -l app.kubernetes.io/name=etcd
 
-# 測試連線
+# Admin API 無法存取
+kubectl -n apisix port-forward svc/apisix-admin 9180:9180
 curl http://127.0.0.1:9180/apisix/admin/routes \
   -H "X-API-KEY: edd1c9f034335f136f87ad84b625c8f1"
 ```
@@ -614,6 +894,8 @@ kubectl top pods -A
 # 如果記憶體不足，可以減少 Worker 節點
 # 修改 kind-cluster.yaml，移除 worker 節點後重建
 ```
+
+> **除錯黃金法則：** 從外到內逐層排查 — Port Mapping → Ingress/APISIX → Service → Pod。每一層都先確認它「收到了請求」再往下查。
 
 ---
 
