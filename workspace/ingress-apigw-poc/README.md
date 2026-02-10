@@ -32,8 +32,12 @@
 
 你可以把它想像成**大樓的接待櫃台**——它查看進來的請求（URL 路徑或主機名稱），然後引導到正確的內部服務。
 
-```
-外部流量 → Ingress Controller（例如 NGINX） → Ingress 規則 → Service → Pod
+```mermaid
+flowchart LR
+    A[外部流量] --> B[Ingress Controller\ne.g. NGINX]
+    B --> C[Ingress 規則]
+    C --> D[Service]
+    D --> E[Pod]
 ```
 
 **重要概念：**
@@ -83,25 +87,11 @@ spec:
 
 **Apache APISIX** 是一個高效能、雲原生的 API Gateway，基於 **NGINX** 和 **Lua（OpenResty）** 建構，是 Apache 軟體基金會的頂級專案。
 
-```
-客戶端請求
-     │
-     ▼
-┌──────────────┐
-│  APISIX       │  ← 路由 + 插件（認證、限流等）
-│ （資料平面）   │
-└──────┬───────┘
-       │
-       ▼
-┌──────────────┐
-│   etcd        │  ← 設定儲存（即時更新設定）
-└──────────────┘
-       │
-       ▼
-┌──────────────┐
-│  APISIX       │  ← Web UI 管理介面
-│  Dashboard    │
-└──────────────┘
+```mermaid
+flowchart TB
+    A[客戶端請求] --> B["APISIX（資料平面）\n路由 + 插件（認證、限流等）"]
+    B <--> C["etcd\n設定儲存（即時更新）"]
+    C <--> D["APISIX Dashboard\nWeb UI 管理介面"]
 ```
 
 **主要特色：**
@@ -115,12 +105,15 @@ spec:
 
 **Kind** 全名是「**K**ubernetes **in** **D**ocker」，它在你的本機 Docker 裡面運行完整的 Kubernetes 叢集，非常適合開發和 PoC。
 
-```
-你的電腦
-  └── Docker
-       ├── kind-control-plane（容器，扮演 K8s 主節點 + 工作節點）
-       ├── kind-worker（容器，工作節點）
-       └── kind-worker2（容器，工作節點）
+```mermaid
+flowchart TB
+    subgraph 你的電腦
+        subgraph Docker
+            CP["kind-control-plane\n（K8s 主節點 + 工作節點）"]
+            W1["kind-worker\n（工作節點）"]
+            W2["kind-worker2\n（工作節點）"]
+        end
+    end
 ```
 
 **為什麼用 Kind？**
@@ -136,27 +129,23 @@ spec:
 
 本 PoC 在同一個 Kind 叢集中同時部署 NGINX Ingress Controller 和 Apache APISIX，共用相同的後端服務：
 
-```
-                        ┌─────────────────────────────────────────────┐
-                        │           Kind Cluster                       │
-                        │                                              │
-  localhost:80/443 ────►│  ┌─────────────────────┐                    │
-  (NGINX Ingress)       │  │ NGINX Ingress        │                    │
-                        │  │ Controller           │──┐                │
-                        │  └─────────────────────┘  │                │
-                        │                            │  ┌───────────┐ │
-                        │                            ├─►│ app-v1    │ │
-                        │                            │  │ (2 pods)  │ │
-  localhost:9080/9443 ─►│  ┌─────────────────────┐  │  └───────────┘ │
-  (APISIX)              │  │ Apache APISIX        │  │                │
-                        │  │ + etcd               │──┤  ┌───────────┐ │
-                        │  └─────────────────────┘  └─►│ app-v2    │ │
-                        │                               │ (2 pods)  │ │
-                        │  ┌─────────────────────┐      └───────────┘ │
-                        │  │ Prometheus + Grafana │                    │
-                        │  │ (monitoring)         │                    │
-                        │  └─────────────────────┘                    │
-                        └─────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph Kind Cluster
+        NGINX["NGINX Ingress\nController"]
+        APISIX["Apache APISIX\n+ etcd"]
+        V1["app-v1\n（2 pods）"]
+        V2["app-v2\n（2 pods）"]
+        MON["Prometheus\n+ Grafana"]
+    end
+
+    EXT1["localhost:80/443\n（NGINX Ingress）"] --> NGINX
+    EXT2["localhost:9080/9443\n（APISIX）"] --> APISIX
+
+    NGINX --> V1
+    NGINX --> V2
+    APISIX --> V1
+    APISIX --> V2
 ```
 
 **Port 對應表：**
@@ -539,13 +528,12 @@ curl http://localhost:9080/apisix/prometheus/metrics
 
 在許多企業場景中，可以同時使用兩者：
 
-```
-外部流量（南北向） → Apache APISIX（API Gateway）
-                         │
-                         ▼
-               Kubernetes 叢集內部
-                         │
-內部流量（東西向） → NGINX Ingress（簡單路由）
+```mermaid
+flowchart TB
+    EXT["外部流量（南北向）"] --> APISIX["Apache APISIX\n（API Gateway）"]
+    APISIX --> K8S["Kubernetes 叢集內部"]
+    K8S --> NGINX["NGINX Ingress\n（簡單路由）"]
+    NGINX --> SVC["內部服務（東西向）"]
 ```
 
 - **APISIX** 負責對外的 API 管理（認證、限流、監控）
