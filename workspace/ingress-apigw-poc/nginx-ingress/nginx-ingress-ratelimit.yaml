@@ -1,0 +1,23 @@
+# NGINX Ingress - Rate limiting via annotations
+# Limits: 10 requests/sec, burst multiplier 5, max 5 connections
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: demo-ingress-ratelimited
+  annotations:
+    nginx.ingress.kubernetes.io/limit-rps: "10"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "5"
+    nginx.ingress.kubernetes.io/limit-connections: "5"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: demo-limited.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: app-v1-svc
+                port:
+                  number: 80

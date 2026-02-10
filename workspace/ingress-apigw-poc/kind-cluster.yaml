@@ -1,0 +1,29 @@
+# Kind cluster configuration for Ingress vs. API Gateway PoC
+# Creates a 3-node cluster (1 control-plane + 2 workers) with port mappings
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      # NGINX Ingress Controller ports
+      - containerPort: 80
+        hostPort: 80
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 443
+        protocol: TCP
+      # Apache APISIX ports
+      - containerPort: 9080
+        hostPort: 9080
+        protocol: TCP
+      - containerPort: 9443
+        hostPort: 9443
+        protocol: TCP
+  - role: worker
+  - role: worker

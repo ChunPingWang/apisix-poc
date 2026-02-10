@@ -1,0 +1,52 @@
+# Helm values for kube-prometheus-stack (Prometheus + Grafana)
+# Optimized for Kind cluster (reduced resource usage)
+prometheus:
+  prometheusSpec:
+    retention: 2h
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    # Scrape APISIX metrics
+    additionalScrapeConfigs:
+      - job_name: "apisix"
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - apisix
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            target_label: __address__
+            regex: (.+)
+            replacement: ${1}:9091
+
+grafana:
+  enabled: true
+  service:
+    type: NodePort
+    nodePort: 30300
+  adminPassword: "admin"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 256Mi
+
+alertmanager:
+  enabled: false
+
+nodeExporter:
+  enabled: false
+
+kubeStateMetrics:
+  enabled: true

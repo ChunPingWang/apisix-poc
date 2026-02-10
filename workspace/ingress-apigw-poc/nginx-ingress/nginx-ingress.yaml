@@ -1,0 +1,28 @@
+# NGINX Ingress - Basic path-based routing
+# Routes /v1 -> app-v1-svc, /v2 -> app-v2-svc
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: demo-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: demo.local
+      http:
+        paths:
+          - path: /v1
+            pathType: Prefix
+            backend:
+              service:
+                name: app-v1-svc
+                port:
+                  number: 80
+          - path: /v2
+            pathType: Prefix
+            backend:
+              service:
+                name: app-v2-svc
+                port:
+                  number: 80
